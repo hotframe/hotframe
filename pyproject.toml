@@ -1,0 +1,154 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hotframe"
+dynamic = ["version"]
+description = "Modular Python web framework with hot-mount dynamic modules and stateful, WebSocket-driven LiveComponents — FastAPI + SQLAlchemy + Jinja2."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Ioan Beilic", email = "ioanbeilic@gmail.com" },
+]
+keywords = [
+    "fastapi",
+    "sqlalchemy",
+    "websocket",
+    "live",
+    "reactive",
+    "jinja2",
+    "framework",
+    "modular",
+    "plugins",
+    "hot-reload",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: WSGI :: Application",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.13",
+    "jinja2>=3.1",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "typer>=0.15",
+    "httpx>=0.27",
+    "structlog>=24.4",
+    "itsdangerous>=2.2",
+    "markupsafe>=2.1",
+    "python-multipart>=0.0.20",
+    "bcrypt>=4.0",
+    "pyjwt[crypto]>=2.8",
+    "sse-starlette>=1.6",
+    "watchfiles>=0.21",
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+    "aiosqlite>=0.19",
+    "jinjax>=0.55",
+    "asgi-correlation-id>=4.3.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "ruff>=0.7",
+    "import-linter>=2.1",
+    "mypy>=1.13",
+]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+]
+shell = [
+    "ipython>=8.0",
+]
+
+[project.urls]
+Homepage = "https://hotframe.dev"
+Documentation = "https://hotframe.dev"
+Repository = "https://github.com/hotframe/hotframe"
+Issues = "https://github.com/hotframe/hotframe/issues"
+Changelog = "https://github.com/hotframe/hotframe/blob/main/CHANGELOG.md"
+
+[project.scripts]
+hf = "hotframe.management.cli:app"
+hotframe = "hotframe.management.cli:app"
+
+[tool.hatch.version]
+path = "src/hotframe/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hotframe"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",      # pycodestyle + pyflakes
+    "I",                 # isort
+    "UP",                # pyupgrade
+    "B",                 # bugbear
+    "C4",                # comprehensions
+    "SIM",               # simplify
+    "RUF",               # ruff-specific
+]
+ignore = [
+    "E501",     # line too long (handled by formatter)
+    "RUF012",   # mutable class defaults (intentional in config/Pydantic models)
+    "SIM105",   # contextlib.suppress (try/except is clearer in async code)
+    "SIM108",   # ternary (multi-line if/else is more readable)
+    "SIM102",   # collapsible if (nested ifs are clearer for validation)
+    "SIM103",   # needless bool
+    "SIM114",   # if-with-same-arms
+    "UP042",    # StrEnum (keep str+Enum for broader compat)
+    "B039",     # mutable ContextVar default (intentional)
+    "RUF006",   # asyncio dangling task (fire-and-forget is intended)
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "src/hotframe"]
+addopts = "-ra --strict-markers --cov=hotframe --cov-report=term-missing --cov-report=xml"
+
+[tool.coverage.run]
+source = ["src/hotframe"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
+
+[tool.importlinter]
+root_package = "hotframe"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "hotframe no importa aplicación usuaria"
+type = "forbidden"
+source_modules = ["hotframe"]
+forbidden_modules = ["apps", "modules", "kernel_modules"]
