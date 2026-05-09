@@ -1,0 +1,770 @@
+# hotframe — full reference for AI assistants
+
+> Self-contained context for working on / answering questions about
+> hotframe. Designed to be dropped into an LLM context window without
+> needing to fetch other pages. The pruned index lives in
+> [llms.txt](https://github.com/hotframe/hotframe/blob/main/llms.txt).
+>
+> hotframe is a modular Python web framework. FastAPI + SQLAlchemy 2.0
+> + Jinja2, with a Django-like surface, plus two defining pieces on
+> top: hot-mount dynamic modules and stateful WebSocket-driven
+> `LiveComponent`s. Python 3.12+, Apache 2.0.
+
+---
+
+## At a glance
+
+| Aspect | Value |
+|---|---|
+| Latest version | `1.0.0` |
+| Install | `pip install hotframe` |
+| Python | 3.12+ |
+| Repo | https://github.com/hotframe/hotframe |
+| PyPI | https://pypi.org/project/hotframe/ |
+| Docs | https://hotframe.dev (also `docs/GUIDE.md` in repo) |
+| Site stack (when live) | hotframe itself + OutfitKit for UI |
+| License | Apache 2.0 |
+
+The `1.0.0` line is a clean reset under the new `hotframe.dev` project
+home. Earlier `0.x` releases are deprecated and not API-compatible.
+
+## Mental model in three sentences
+
+1. **`apps/`** are static parts of your project (auth, layout); the
+   framework discovers them at boot. **`modules/`** are dynamic
+   plugins that you install / activate / deactivate / uninstall at
+   runtime through `ModuleRuntime` — no process restart.
+2. Stateless UI uses **`Component`**: a directory with `template.html`
+   plus optional `component.py` (Pydantic props) and `routes.py`. You
+   render it from a template with `render_component(name)` or
+   `{% component "name" %}`.
+3. Stateful, reactive UI uses **`LiveComponent`**: a Pydantic class
+   with `prop` fields (immutable), `state` fields (mutable), an
+   `on_mount`, and `@event("name")` async handlers. Cold-load it with
+   `{% live "name" prop=value %}`. The browser opens a single
+   WebSocket to `/ws/_live`, sends events captured from
+   `data-on:click` / `data-on:submit` / `data-bind` attributes, and
+   `morphdom`-applies HTML patches the server sends back.
+
+## Public API (49 symbols, all importable from `hotframe`)
+
+```
+# Bootstrap and settings
+create_app, HotframeSettings, get_settings
+
+# App and module config
+AppConfig, ModuleConfig
+
+# Models and ORM
+Base, Model, TimeStampedModel, ActiveModel
+HubMixin, TimestampMixin, AuditMixin, SoftDeleteMixin
+HubQuery
+setup_orm_events
+
+# Repository pattern + persistence protocols
+BaseRepository
+ISession, IQueryBuilder, IRepository
+IExecuteResult, IScalarResult
+
+# Events / hooks
+AsyncEventBus, HookRegistry
+BaseEvent, register_event
+
+# Views (HTML routes) + plain HTTP redirect/refresh helpers
+view, htmx_view (alias of view)
+is_reactive_request, is_htmx_request (always False — kept for symmetry)
+reactive_redirect, reactive_refresh, reactive_trigger, reactive_message
+htmx_redirect, htmx_refresh, htmx_trigger (aliases)
+add_message
+sse_stream
+BroadcastHub
+
+# Templating
+SlotRegistry
+
+# Stateless components
+Component, ComponentRegistry, ComponentEntry
+
+# Live runtime
+LiveComponent, LiveSession, LiveRuntime, event
+
+# Auth + DI
+get_session_user_id, hash_password, verify_password
+has_permission, require_permission
+DbSession, CurrentUser, OptionalUser
+EventBus, Hooks, Slots
+get_db, get_current_user
+
+# Module / engine
+ModuleService, action
+ModuleStateDB, HotMountPipeline, ImportManager, MarketplaceClient
+
+# Database
+get_engine, get_session_factory
+
+# HTTP clients (auth + interceptors)
+AuthenticatedClient, HttpClientRegistry
+Auth, BearerAuth, ApiKeyAuth, QueryApiKeyAuth, BasicAuth, HmacAuth
+CustomAuth, NoAuth
+Interceptor, InterceptorBase, CallNext
+RetryInterceptor, CircuitBreakerInterceptor, RefreshInterceptor
+exponential_backoff, discover_interceptors
+```
+
+## Project layout (after `hf startproject myapp`)
+
+```
+myapp/
+├── asgi.py              # entrypoint: from hotframe import create_app; app = create_app(settings)
+├── manage.py            # CLI inside the project
+├── settings.py          # the ONLY configuration file
+├── pyproject.toml
+├── apps/
+│   └── shared/
+│       ├── app.py       # AppConfig
+│       ├── routes.py    # router (HTML)
+│       ├── api.py       # api_router (REST)
+│       ├── models.py
+│       ├── templates/shared/{pages,partials}/
+│       ├── components/<name>/template.html
+│       └── migrations/
+├── modules/             # one subdir per dynamic module
+└── tests/
+```
+
+`asgi.py` is **3 lines**. All wiring (middleware, routes, components,
+WS, modules) is done by `create_app`. There is no `INSTALLED_APPS`
+gate by default — `apps/*/` is auto-scanned.
+
+## CLI (`hf`)
+
+```
+hf startproject <name>           # full scaffold; use '.' for current dir
+hf startapp <name>               # apps/<name>/
+hf startmodule <name>            # modules/<name>/
+hf startmodule <name> --api-only # no HTML views
+hf startmodule <name> --system   # is_system=True, cannot be uninstalled
+
+hf runserver                     # uvicorn with reload
+hf shell                         # IPython / code REPL with app, settings, db, events, hooks, slots, runtime preloaded
+hf migrate                       # alembic upgrade head (all apps + modules)
+hf makemigrations <target>       # alembic revision --autogenerate
+hf modules list
+hf modules install <source>      # name | .zip path | URL | marketplace
+hf modules update <source>       # backup + rollback on failure
+hf modules activate <name>
+hf modules deactivate <name>
+hf modules uninstall <name> [--keep-data] [--yes]
+hf version
+```
+
+## Settings (subset of `HotframeSettings`)
+
+Loaded from constructor args → env vars → `.env` → defaults.
+
+| Field | Default | Notes |
+|---|---|---|
+| `DATABASE_URL` | `sqlite+aiosqlite:///./app.db` | |
+| `SECRET_KEY` | auto-generated | |
+| `DEBUG` | `True` | |
+| `APP_TITLE` | `"Hotframe App"` | |
+| `LOG_LEVEL` | `"INFO"` | |
+| `MIDDLEWARE` | 12 default classes | rarely overridden |
+| `MODULES_DIR` | `./modules` | |
+| `MODULE_MARKETPLACE_URL` | `""` | optional |
+| `AUTH_USER_MODEL` | `""` | dotted path, e.g. `apps.accounts.models.User` |
+| `AUTH_LOGIN_URL` | `/login` | |
+| `PERMISSION_RESOLVER` | `""` | dotted path to `async (request, user_id) -> list[str]` |
+| `SESSION_COOKIE_NAME` | `"session"` | |
+| `SESSION_MAX_AGE` | 30 days | |
+| `RATE_LIMIT_API` | 120 / min | |
+| `RATE_LIMIT_AUTH` | 60 / min | |
+| `RATE_LIMIT_AUTH_PREFIXES` | `[]` | |
+| `CSP_ENFORCE` | `False` | |
+| `CSP_TRUSTED_TYPES` | `False` | enable only when project ships a compatible policy |
+| `STATIC_ROOT` | `./static` | |
+| `STATIC_URL` | `/static/` | |
+| `MEDIA_ROOT` | `./media` | |
+| `MEDIA_URL` | `/media/` | |
+| `MEDIA_STORAGE` | `"local"` | `"local"` or `"s3"` |
+| `CORS_ORIGINS` | `[]` | empty = CORS disabled |
+| `LANGUAGE` | `"en"` | |
+| `CURRENCY` | `"USD"` | |
+
+## Apps vs modules
+
+The distinction is structural, not stylistic.
+
+**Apps** (`apps/<name>/`):
+- Discovered at `create_app` time by walking `apps/`.
+- Always live for the lifetime of the process.
+- Cannot be installed / uninstalled at runtime.
+- Right place for: auth, layout, public pages, framework glue.
+
+**Modules** (`modules/<id>/`):
+- Have a `module.py` declaring a `ModuleConfig` (name, version, deps,
+  `has_views`, `has_api`, `is_system`, `requires_restart`).
+- Their lifecycle state (`installed` | `disabled` | `active` |
+  `degraded`) lives in the `module` DB table.
+- `ModuleRuntime` (in `app.state.module_runtime`) orchestrates:
+  - `install(module_id, source=None)` — copy / extract files, run
+    install hook, register row.
+  - `activate(module_id)` — `importlib`-load the package, mount routes
+    at `/m/<id>` (HTML) and `/api/v1/m/<id>` (REST), register events,
+    hooks, slots and middleware, run migrations, register in
+    `ModuleRegistry`.
+  - `deactivate(module_id)` — unmount routes, unregister event/hook/
+    slot contributions, purge `sys.modules`, drop module DB rows.
+  - `uninstall(module_id)` — remove files.
+  - `update(module_id, source=None)` — backup current version, install
+    new, roll back on any failure.
+- `ModuleSource` resolution order: URL → `.zip` path → marketplace →
+  filesystem `modules/`.
+
+The boot sequence in `create_app` reads `module` rows where
+`status='active'` and re-mounts each module's routes. So a process
+restart does not require re-clicking "Activate".
+
+## `@view` decorator
+
+```python
+from fastapi import APIRouter, Request
+from hotframe import view
+
+router = APIRouter()
+
+@router.get("/dashboard")
+@view(module_id="shared", view_id="dashboard", permissions="dashboard.view")
+async def dashboard(request: Request):
+    return {"items": await load_items()}
+```
+
+What it does:
+1. Auth (`login_required=True` by default → redirect to
+   `settings.AUTH_LOGIN_URL` if no session).
+2. Permission check via `settings.PERMISSION_RESOLVER`.
+3. Template auto-discovery: `{module_id}/pages/{view_id}.html` (with
+   variants like `_list.html`, `_form.html`, `index.html`).
+4. Render with global context (`request`, `csrf_token`,
+   `csrf_input()`, `csp_nonce`, `user`, `current_path`,
+   `module_menu_items`, plus whatever the view returns).
+
+`htmx_view` is a kept alias of `view` for naming symmetry.
+
+## Components (stateless, reusable widgets)
+
+```
+apps/shared/components/badge/
+├── template.html           # required
+├── component.py            # optional; Pydantic-typed props
+├── routes.py               # optional; APIRouter mounted at /_components/<name>/
+└── static/                 # optional; served at /_components/<name>/static/
+```
+
+```python
+# component.py
+from hotframe.components import Component
+
+class BadgeProps(Component):
+    text: str
+    variant: str = "default"
+```
+
+```jinja
+{# template.html #}
+<span class="badge badge-{{ variant }}">{{ text }}</span>
+```
+
+Use:
+```jinja
+{{ render_component('badge', text='New', variant='primary') }}
+
+{% component 'alert' type='warning' %}
+  Stock is low
+{% endcomponent %}
+```
+
+`attrs={...}` is the way to pass HTML attributes whose name is a
+Python reserved word (`class`, `type`).
+
+Discovery roots:
+- `apps/<app>/components/<name>/` — discovered at boot, never
+  unregistered.
+- `modules/<id>/components/<name>/` — discovered on module activate,
+  unregistered on module deactivate.
+
+Renders are isolated: components only see the validated props plus the
+*framework slice* (`request`, `csrf_token`, `csp_nonce`, `user`,
+`current_path`). Parent template variables do not leak.
+
+## LiveComponent (stateful, server-rendered, WS-driven)
+
+### Authoring
+
+```python
+# modules/todo/components/todo_list/component.py
+from hotframe.live import LiveComponent, event
+from modules.todo.models import Todo
+
+class TodoList(LiveComponent):
+    user_id: int            # prop (set at mount, treated as immutable)
+    items: list = []        # state (mutable inside handlers)
+    new_text: str = ""
+
+    async def on_mount(self) -> None:
+        self.items = await Todo.where(user_id=self.user_id).all()
+
+    async def on_unmount(self) -> None:
+        # optional, called when WS closes or the client detaches
+        pass
+
+    @event("toggle")
+    async def toggle(self, todo_id: str) -> None:
+        t = next(t for t in self.items if str(t.id) == todo_id)
+        t.done = not t.done
+        await t.save()
+
+    @event("add")
+    async def add(self) -> None:
+        if not self.new_text.strip():
+            return
+        await Todo.create(user_id=self.user_id, text=self.new_text)
+        self.items = await Todo.where(user_id=self.user_id).all()
+        self.new_text = ""
+
+    # `extra_context()` and `render_context()` can be overridden if
+    # you need derived values exposed to the template alongside fields.
+```
+
+```jinja
+{# template.html — same dir #}
+<ul>
+{% for todo in items %}
+  <li>
+    <input type="checkbox" {% if todo.done %}checked{% endif %}
+           data-on:click="toggle:{{ todo.id }}">
+    {{ todo.text }}
+  </li>
+{% endfor %}
+</ul>
+<form data-on:submit="add">
+  <input data-bind="new_text">
+  <button type="submit">Add</button>
+</form>
+```
+
+### Cold-load from a page
+
+```jinja
+{% extends "shared/base.html" %}
+{% block head %}
+  {{ live_assets() }}      {# emits <script> for live.js + morphdom + nonce #}
+{% endblock %}
+{% block body %}
+  {% live "todo_list" user_id=user.id %}
+{% endblock %}
+```
+
+### Conventions
+
+| Convention | Meaning |
+|---|---|
+| `prop: int` | Pydantic field without default; required at mount |
+| `state: list = []` | Pydantic field with default; mutable in handlers |
+| `@event("name")` | Marks `async def` as handler for wire event `"name"` |
+| `data-on:click="name:payload"` | Captured by `live.js`, sent over WS |
+| `data-on:submit="name"` | Form submit; payload = serialised FormData |
+| `data-bind="field"` | Two-way bind to a state field; debounced 250 ms |
+
+There are no lifecycle hooks beyond `on_mount` / `on_unmount`. There
+is no `should_update` / `useEffect` / etc. Every event re-renders the
+whole component; `morphdom` ensures the DOM diff is minimal.
+
+### Rules of thumb
+
+- State must be reconstructible from `props + DB`. Reconnect runs
+  `on_mount` again. Don't put live asyncio tasks, open files, or
+  unique handles on `self`.
+- Two browser tabs = two WebSocket sessions = two independent
+  instances. There is no shared state across tabs unless you go
+  through DB / pub-sub.
+- A handler crash returns an `err` envelope to the client; the
+  WebSocket stays open.
+- `data-bind` updates do **not** trigger a render (deliberate — keeps
+  IME / autocomplete from being interrupted). The next event sees the
+  updated state and re-renders normally.
+- `self.toast(msg, level="success")` and `self.navigate(url)` are
+  available inside handlers and emit `toast` / `nav` envelopes.
+
+## Live runtime internals
+
+```
+hotframe/live/
+├── __init__.py        # exports LiveComponent, event, LiveSession, LiveRuntime, live_router
+├── base.py            # class LiveComponent(BaseModel, ConfigDict(validate_assignment=True))
+├── decorators.py      # @event(name): stamps __hf_live_event__ on the function
+├── protocol.py        # TypedDict envelopes for the wire format
+├── diff.py            # render_component_inner + wrap_with_envelope
+├── session.py         # class LiveSession (per WS, dict {cid: instance}, asyncio.Lock per cid)
+├── runtime.py         # class LiveRuntime (per app, app.state.live, dict {sid: LiveSession})
+├── ws.py              # endpoint /ws/_live (live_router)
+├── jinja_ext.py       # {% live %} tag (cold-load entry)
+├── assets.py          # {{ live_assets() }} Jinja global
+└── static/
+    ├── live.js        # ~5 KB — WS client, event capture, morphdom integration
+    └── morphdom.min.js
+```
+
+`live.js` is served from `/static/hotframe/live.js`; the path is
+mounted automatically by `bootstrap.py`. The `live_assets()` Jinja
+global emits `<script nonce="...">` tags for both files.
+
+## Wire protocol
+
+JSON envelopes over a single WebSocket per page at `/ws/_live`. Flat
+shape, single-letter type discriminator `t`. No versioning in v1.0; if
+breakage is needed in the future, a `v: 2` field will be introduced.
+
+### Client → Server
+
+```jsonc
+// Register a component instance
+{"t":"attach","cid":"c-7a3f...","name":"todo_list","props":{"user_id":42}}
+
+// Invoke an @event handler
+{"t":"event","cid":"c-7a3f...","n":"toggle","p":"42"}
+
+// Form submit (payload = serialised FormData as object)
+{"t":"event","cid":"c-7a3f...","n":"add","p":{"new_text":"Buy milk"}}
+
+// data-bind update (no re-render, debounced)
+{"t":"bind","cid":"c-7a3f...","f":"new_text","v":"Buy mi"}
+
+// Drop the instance (cleanup, e.g. on SPA navigation)
+{"t":"detach","cid":"c-7a3f..."}
+```
+
+### Server → Client
+
+```jsonc
+// Full inner-HTML re-render of one component
+{"t":"patch","cid":"c-7a3f...","html":"<ul>...</ul>"}
+
+// Server-initiated navigation
+{"t":"nav","url":"/done"}
+
+// Handler error (component stays alive, WS stays open)
+{"t":"err","cid":"c-7a3f...","msg":"Todo not found","code":"not_found"}
+
+// Toast notification — client decides where to render it
+{"t":"toast","level":"success","msg":"Saved"}
+```
+
+### Rules
+
+- One WebSocket per page, multiplexes every component on the page.
+- WS closes → client reconnects with exponential backoff (250 ms,
+  500 ms, 1 s, 2 s, max 10 s).
+- After reconnect, the client re-attaches every `[data-hf-cid]`
+  visible in the DOM. The server treats it like a fresh attach
+  (`on_mount` runs again).
+- Server-side, each `cid` has its own `asyncio.Lock`; events on the
+  same component never race. Different components run concurrently.
+
+## Slots (cross-module UI injection)
+
+Different concept from components. Slots are **named extension
+points** that other modules can push UI into.
+
+```python
+# apps/shared/templates/shared/dashboard.html
+{% for entry in slot_entries('dashboard_widgets') %}
+  {% include entry.template with context %}
+{% endfor %}
+```
+
+```python
+# modules/loyalty/slots.py
+def register_slots(slots, module_id):
+    slots.register(
+        slot="dashboard_widgets",
+        template="loyalty/partials/widget.html",
+        priority=5,
+        condition_fn=lambda ctx: ctx.user.has_loyalty,
+    )
+```
+
+Slot contributions are unregistered automatically on module
+deactivate.
+
+## Events / hooks / typed events / ORM events
+
+Three complementary mechanisms, all in `hotframe.signals`.
+
+### `AsyncEventBus` (pub/sub)
+
+```python
+@bus.on("invoice.paid")
+async def send_email(event):
+    await mailer.send(event.invoice_id)
+
+await bus.emit("invoice.paid", invoice_id=42)
+```
+
+Wildcards (`invoice.*`), priorities, `FakeEventBus` for tests.
+
+### `HookRegistry` (filters + actions, WordPress-style)
+
+```python
+hooks.add_filter("invoice.subtotal", lambda total, ctx: total * 1.1)
+await hooks.do_action("invoice.created", invoice=inv)
+```
+
+### Typed events
+
+```python
+from hotframe import BaseEvent, register_event
+
+@register_event
+class InvoicePaid(BaseEvent):
+    invoice_id: int
+    amount: float
+
+await bus.emit_typed(InvoicePaid(invoice_id=42, amount=99.0))
+```
+
+### ORM events
+
+`setup_orm_events()` (called by `create_app`) wires SQLAlchemy
+listeners. Every save / delete emits events like
+`models.<ModelName>.{created,updated,deleted}`.
+
+## Persistence
+
+```python
+from hotframe import Base, TimeStampedModel
+from sqlalchemy.orm import Mapped, mapped_column
+
+class User(TimeStampedModel):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(unique=True)
+```
+
+Mixins: `TimestampMixin`, `SoftDeleteMixin`, `AuditMixin`, `HubMixin`
+(multi-tenant `hub_id` filtering with `HubQuery`).
+
+Repository:
+```python
+from hotframe import BaseRepository
+
+class UserRepo(BaseRepository[User]):
+    model = User
+
+repo = UserRepo(db)
+user = await repo.get(42)
+users = await repo.list(filters={"is_active": True})
+await repo.create(email="x@y.com")
+```
+
+Protocols (`hotframe.db.protocols`): `ISession`, `IExecuteResult`,
+`IScalarResult`, `IQueryBuilder[T]`, `IRepository[T]`. The
+`AsyncSession` from SQLAlchemy satisfies `ISession` structurally; you
+can write code typed against the protocols and stay decoupled.
+
+```python
+from hotframe import DbSession  # = Annotated[ISession, Depends(get_db)]
+
+@router.get("/items")
+async def items(db: DbSession):
+    ...
+```
+
+## Templating
+
+Engine: Jinja2, auto-loads from:
+1. Project-level `templates/` (CWD).
+2. Each `apps/<app>/templates/`.
+3. Each `modules/<id>/templates/`.
+4. Component template roots so `<app>/components/<name>/template.html`
+   resolves.
+
+Jinja2 extensions installed:
+- `jinja2.ext.i18n` (gettext-aware `_()` and `{% trans %}`).
+- `jinja2.ext.do`.
+- `jinja2.ext.loopcontrols`.
+- `ComponentExtension` → `{% component "name" key=val %}body{% endcomponent %}`.
+- `LiveExtension` → `{% live "name" prop=value %}`.
+
+Globals:
+- `static(path)` → `/static/<path>`.
+- `url_for(name, ...)` → routes.
+- `icon(name, size=...)` → Iconify markup.
+- `render_component(name, **props)` → stateless component as Markup.
+- `live_assets()` → `<script>` tags for `live.js` + `morphdom`,
+  carrying the CSP nonce.
+- `slot_entries(name)` → iterable of slot contributions.
+- `csrf_input()` → `<input type="hidden" name="csrf_token" value="...">`.
+- `currency`, `dateformat`, `timeformat`, `timesince`, `truncatewords`,
+  `slugify` filters.
+
+`TemplateResponse` automatically injects `csrf_token`, `csrf_input()`
+and `csp_nonce`. No manual context passing needed.
+
+## Security defaults
+
+- **CSRF**: `CSRFMiddleware` enabled. POST/PUT/PATCH/DELETE require a
+  token via form field or `X-CSRF-Token` header. Exempt prefixes are
+  `/api/`, `/health`, `/static/` (configurable via
+  `settings.CSRF_EXEMPT_PREFIXES`).
+- **CSP**: per-request nonce; `csp_nonce` available in templates.
+  Configure `CSP_ALLOWED_SOURCES` to allow extra CDNs.
+- **Sessions**: signed cookie via `itsdangerous` +
+  Starlette's `SessionMiddleware`.
+- **Rate limiting**: three buckets — `api` (`/api/...`), `view`
+  (`/m/...`), `auth` (configurable prefixes). Sliding window, per IP.
+- **Middleware stack** (default order, outermost first):
+  `RequestIdMiddleware`, `LoggingMiddleware`, `CompressionMiddleware`,
+  `SessionSafeMiddleware`, Starlette `SessionMiddleware`,
+  `LanguageMiddleware`, `ModuleBoundaryMiddleware`,
+  `APIRateLimitMiddleware`, `CSRFMiddleware`, `CSPMiddleware`,
+  `TimeoutMiddleware`.
+
+## Testing
+
+```python
+from hotframe.testing import create_test_app, test_db_session, FakeEventBus
+
+app = create_test_app()  # SQLite in-memory, CSRF disabled, rate limit relaxed
+
+async for session in test_db_session():
+    ...
+
+bus = FakeEventBus()
+await bus.emit("x")
+assert bus.events == [("x", {})]
+```
+
+The framework's own test suite has 351 tests covering apps, auth,
+broadcast, CLI, components (registry / discovery / mounting), engine
+(boundary, dependency, lifecycle, loader, marketplace, module runtime,
+pipeline, state), HTTP clients + interceptors, the live runtime
+(base, decorators, protocol, session, diff), middleware, models,
+ORM events, repository, signals, templating, view layer.
+
+## Common gotchas
+
+- **Two `on_mount` calls per page load**: once during the synchronous
+  Jinja cold-load, once after the WebSocket attach. Make `on_mount`
+  idempotent (a DB query is fine; spawning a background task isn't).
+  An optional optimisation that signs `state` into `data-hf-state` and
+  skips the second `on_mount` is documented as a future improvement
+  but is not in v1.0.
+- **Sticky sessions implicit**: `LiveSession` lives in process memory.
+  Multi-instance deployments need either sticky load-balancing or a
+  Redis-backed session store. The latter is not in v1.0.
+- **Discovery only sees subclasses of `Component` / `LiveComponent`**:
+  if your `component.py` declares its class but inherits from
+  something else, discovery logs a warning and the entry has
+  `props_cls=None`.
+- **Reserved Python words**: pass them via `attrs={"class": "..."}` to
+  `render_component`; Jinja2 doesn't accept them as kwargs.
+- **`/m/<id>` is the view mount, `/api/v1/m/<id>` is the API mount**.
+  When two modules try to mount the same id the loader raises a route
+  conflict.
+- **`is_reactive_request`** and `is_htmx_request` always return `False`
+  in v1.0. They exist for naming symmetry. Do not branch on them.
+
+## File-and-class index (cheat sheet)
+
+```
+src/hotframe/
+├── __init__.py                  ← lazy public API
+├── bootstrap.py                 ← create_app, lifespan, _auto_discover_apps
+├── apps/
+│   ├── config.py                ← AppConfig, ModuleConfig, load_manifest
+│   ├── registry.py              ← ModuleRegistry
+│   └── service_facade.py        ← ModuleService, @action
+├── auth/
+│   ├── auth.py                  ← password hashing, session helpers
+│   ├── csp.py                   ← build_csp_header
+│   ├── csrf.py                  ← CSRFMiddleware
+│   ├── current_user.py          ← DI: DbSession, CurrentUser, OptionalUser, get_db
+│   └── permissions.py           ← has_permission, require_permission
+├── components/
+│   ├── base.py                  ← class Component(BaseModel)
+│   ├── entry.py                 ← ComponentEntry dataclass (with is_live flag)
+│   ├── registry.py              ← ComponentRegistry
+│   ├── discovery.py             ← discover_components, discover_app_components, discover_module_components
+│   ├── jinja_ext.py             ← {% component %} tag
+│   ├── mounting.py              ← mount/unmount routers + static for components
+│   └── rendering.py             ← render_component global, _render_entry
+├── config/
+│   ├── settings.py              ← HotframeSettings (Pydantic)
+│   └── database.py              ← async engine + session factory
+├── db/
+│   ├── protocols.py             ← ISession, IQueryBuilder, IRepository
+│   └── singletons.py            ← SingletonMixin, EncryptedString
+├── dev/
+│   └── autoreload.py            ← ModuleWatcher
+├── discovery/                   ← module scanner
+├── engine/
+│   ├── module_runtime.py        ← ModuleRuntime (install/activate/...)
+│   ├── pipeline.py              ← HotMountPipeline (install with rollback)
+│   ├── loader.py                ← importlib-based mount/unmount
+│   ├── import_manager.py        ← sys.modules tracking
+│   ├── state.py                 ← ModuleStateDB
+│   ├── lifecycle.py             ← lifecycle hooks
+│   ├── dependency.py            ← DependencyManager (topo sort)
+│   ├── s3_source.py             ← S3 module source
+│   ├── marketplace_client.py    ← MarketplaceClient
+│   └── boundary.py              ← ModuleBoundaryMiddleware
+├── forms/rendering.py           ← FormRenderer
+├── http/                        ← AuthenticatedClient + interceptor system
+├── live/                        ← LiveComponent runtime (see "Live runtime internals" above)
+├── management/cli.py            ← Typer CLI
+├── middleware/                  ← 12 middleware classes
+├── migrations/runner.py         ← ModuleMigrationRunner, MultiNamespaceRunner
+├── models/                      ← Base, mixins, HubQuery
+├── orm/
+│   ├── events.py                ← setup_orm_events
+│   ├── transactions.py          ← atomic()
+│   └── listeners.py             ← PgNotifyBridge
+├── repository/base.py           ← BaseRepository[T]
+├── signals/
+│   ├── dispatcher.py            ← AsyncEventBus
+│   ├── hooks.py                 ← HookRegistry
+│   ├── types.py                 ← BaseEvent, @register_event
+│   └── catalog.py               ← built-in events
+├── templating/
+│   ├── engine.py                ← create_template_engine, refresh_template_dirs
+│   ├── extensions.py            ← Jinja2 globals + filters
+│   └── slots.py                 ← SlotRegistry
+├── testing/__init__.py          ← create_test_app, test_db_session, fakes
+├── utils/                       ← observability (logging, metrics, telemetry)
+└── views/
+    ├── responses.py             ← @view, reactive_*, add_message, sse_stream
+    └── broadcast.py             ← BroadcastHub, /stream/* endpoints
+```
+
+## Versioning policy
+
+Semantic versioning. Within a `1.x` line, breaking changes are
+forbidden in minors and patches; `1.x` releases that ship behaviour
+removal will require a `2.0`. Deprecation period: at least one minor
+release with a runtime warning before removal.
+
+The `htmx_*` aliases (`htmx_view`, `htmx_redirect`, etc.) are not
+deprecated — they are stable aliases of the `view` / `reactive_*`
+functions, kept for naming symmetry.
+
+## Where to look first
+
+1. To **start using hotframe**: `README.md`, then `docs/GUIDE.md`.
+2. To **understand the live runtime**: read `src/hotframe/live/base.py`
+   (the LiveComponent class, ~200 LOC), then `protocol.py`, then
+   `session.py`. The whole runtime is ~700 LOC.
+3. To **understand the module engine**: `engine/module_runtime.py`
+   then `engine/loader.py` then `engine/pipeline.py`.
+4. To **debug a failing test**: tests live next to the code they
+   exercise — `src/hotframe/<package>/tests/`.

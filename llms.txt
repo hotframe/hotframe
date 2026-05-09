@@ -1,0 +1,76 @@
+# hotframe
+
+> hotframe is a modular Python web framework. It combines FastAPI,
+> SQLAlchemy 2.0 and Jinja2 under a Django-like API, and adds two
+> defining pieces on top: a hot-mount module engine (install /
+> activate / deactivate / uninstall plugins at runtime, no restart),
+> and `LiveComponent` — stateful, server-rendered, WebSocket-driven
+> components. The server holds component state, the client streams
+> events and applies HTML patches via `morphdom`. There is no HTMX,
+> no Alpine, no Datastar, no client-side framework, no build step.
+
+The vendored client (`live.js` + `morphdom`, ~12 KB minified+gzip) is
+served automatically from `/static/hotframe/`. Templates carry the
+runtime via `{{ live_assets() }}`, and components are cold-loaded with
+the `{% live "name" prop=value %}` Jinja2 tag. Stateless reusable
+widgets stay in the parallel `Component` system (`{% component %}` and
+`render_component()`), which is unaffected by the live runtime.
+
+The framework targets Python 3.12+ and is licensed Apache 2.0.
+
+## Docs
+
+- [README](https://github.com/hotframe/hotframe/blob/main/README.md): the
+  one-page overview of what hotframe is, how to install it, and a
+  30-second `LiveComponent` example.
+- [Step-by-step guide (docs/GUIDE.md)](https://github.com/hotframe/hotframe/blob/main/docs/GUIDE.md):
+  the canonical mental model. Walks every subsystem (apps vs modules,
+  `@view`, components, `LiveComponent`, the live runtime internals,
+  slots, events/hooks, persistence, CLI, settings, security) and
+  finishes by writing a module from scratch.
+- [CHANGELOG](https://github.com/hotframe/hotframe/blob/main/CHANGELOG.md):
+  release notes. The `1.0.0` line is a clean reset; earlier `0.x`
+  releases are deprecated.
+- [CONTRIBUTING](https://github.com/hotframe/hotframe/blob/main/CONTRIBUTING.md):
+  how to report issues, open PRs, and the commit conventions used.
+
+## Examples
+
+- [The 30-second LiveComponent](https://github.com/hotframe/hotframe/blob/main/README.md#a-livecomponent-in-30-seconds):
+  a TodoList component (Python class + Jinja template + cold-load
+  page) showing every public API a typical handler touches: `prop`,
+  `state`, `on_mount`, `@event`, `data-on:click`, `data-bind`,
+  `{% live %}`.
+- [Writing a module from scratch (docs/GUIDE.md §16)](https://github.com/hotframe/hotframe/blob/main/docs/GUIDE.md):
+  end-to-end flow — `hf startmodule notes`, `module.py`, model,
+  migrations, LiveComponent, route, install, activate. The fastest
+  path from zero to a working dynamic module.
+
+## API
+
+- [Public API surface (49 symbols)](https://github.com/hotframe/hotframe/blob/main/src/hotframe/__init__.py):
+  everything importable as `from hotframe import X`. Includes
+  `create_app`, `HotframeSettings`, `LiveComponent`, `event`,
+  `LiveSession`, `LiveRuntime`, `Component`, `ComponentRegistry`,
+  `view`, `BaseRepository`, `ISession`, the model bases and mixins,
+  the event bus, hook registry, slot registry and the module runtime
+  primitives.
+- [Live runtime package](https://github.com/hotframe/hotframe/tree/main/src/hotframe/live):
+  the smallest reading unit to understand how reactivity works.
+  `base.py` is `LiveComponent`, `protocol.py` lists every wire
+  envelope, `session.py` is the dispatch loop, `ws.py` is the
+  `/ws/_live` endpoint, `static/live.js` is the client.
+- [Module engine](https://github.com/hotframe/hotframe/tree/main/src/hotframe/engine):
+  `module_runtime.py` orchestrates install/activate/deactivate/
+  uninstall/update; `loader.py` does the actual `importlib`-driven
+  hot-mount; `pipeline.py` is the install pipeline with rollback.
+
+## Optional
+
+- [Code of Conduct](https://github.com/hotframe/hotframe/blob/main/CODE_OF_CONDUCT.md)
+- [Security policy](https://github.com/hotframe/hotframe/blob/main/SECURITY.md)
+- [llms-full.txt — full reference for AI assistants](https://github.com/hotframe/hotframe/blob/main/llms-full.txt):
+  expanded version of this index with the actual public API, wire
+  protocol, and project-shape conventions inlined; use when you want
+  one self-contained context blob instead of fetching individual
+  links.
