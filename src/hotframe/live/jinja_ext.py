@@ -80,10 +80,14 @@ class LiveExtension(Extension):
 
     def _render_live(self, __component_name__: str, /, **props) -> Markup:
         env = self.environment
-        registry: ComponentRegistry | None = env.globals.get("_hotframe_components")
-        if registry is None:
+        # The registry is injected as an opaque ``object`` on the env globals
+        # by the bootstrap; cast back to its concrete type for the rest of
+        # this method.
+        registry_obj = env.globals.get("_hotframe_components")
+        if registry_obj is None:
             logger.warning("{%% live %%} used before ComponentRegistry was bound")
             return Markup("")
+        registry: ComponentRegistry = registry_obj  # type: ignore[assignment]
 
         entry = registry.get(__component_name__)
         if entry is None:

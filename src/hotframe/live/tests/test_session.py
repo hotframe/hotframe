@@ -102,7 +102,7 @@ def runtime() -> LiveRuntime:
 @pytest.fixture
 def session(runtime: LiveRuntime) -> tuple[LiveSession, FakeWebSocket]:
     ws = FakeWebSocket()
-    s = LiveSession("test-session", ws, runtime)
+    s = LiveSession("test-session", ws, runtime)  # type: ignore[arg-type]
     return s, ws
 
 
@@ -252,15 +252,16 @@ async def test_detach_runs_on_unmount_and_drops_instance(session) -> None:
 @pytest.mark.asyncio
 async def test_two_sessions_isolated(runtime: LiveRuntime) -> None:
     """Same component, two sessions — state never bleeds across."""
-    a = LiveSession("A", FakeWebSocket(), runtime)
-    b = LiveSession("B", FakeWebSocket(), runtime)
+    a = LiveSession("A", FakeWebSocket(), runtime)  # type: ignore[arg-type]
+    b = LiveSession("B", FakeWebSocket(), runtime)  # type: ignore[arg-type]
 
     await a.handle_message({"t": "attach", "cid": "c", "name": "counter", "props": {"start": 1}})
     await b.handle_message({"t": "attach", "cid": "c", "name": "counter", "props": {"start": 100}})
 
     await a.handle_message({"t": "event", "cid": "c", "n": "inc"})
-    assert a.components["c"].value == 2
-    assert b.components["c"].value == 100  # untouched
+    # The instance under "c" is a Counter (LiveComponent subclass with .value).
+    assert a.components["c"].value == 2  # type: ignore[attr-defined]
+    assert b.components["c"].value == 100  # type: ignore[attr-defined]  # untouched
 
 
 @pytest.mark.asyncio

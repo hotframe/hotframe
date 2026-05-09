@@ -222,7 +222,7 @@ async def test_install_uninstall_cycle_stable_memory(tmp_path: Path) -> None:
 def _read_rss() -> int | None:
     """Return current RSS in bytes, or None if no measurement is available."""
     try:
-        import psutil  # type: ignore[import-not-found]
+        import psutil  # type: ignore[import-not-found,import-untyped]
     except ImportError:
         psutil = None  # type: ignore[assignment]
 

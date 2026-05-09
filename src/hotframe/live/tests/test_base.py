@@ -51,8 +51,8 @@ def test_event_on_non_async_method_raises_on_class_creation() -> None:
     with pytest.raises(TypeError):
 
         class Broken(LiveComponent):
-            @event("oops")  # not async — must blow up
-            def sync_handler(self) -> None:  # type: ignore[misc]
+            @event("oops")  # type: ignore[type-var]  # intentional: not async, must blow up
+            def sync_handler(self) -> None:
                 pass
 
 
