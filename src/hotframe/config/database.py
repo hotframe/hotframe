@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -52,6 +53,19 @@ def get_engine() -> AsyncEngine:
             kwargs["connect_args"] = {"check_same_thread": False}
 
         _engine = create_async_engine(settings.DATABASE_URL, **kwargs)
+
+        if settings.is_sqlite:
+            @event.listens_for(_engine.sync_engine, "connect")
+            def _set_sqlite_pragmas(dbapi_conn, _connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode = WAL")
+                cursor.execute("PRAGMA synchronous = NORMAL")
+                cursor.execute("PRAGMA busy_timeout = 5000")
+                cursor.execute("PRAGMA foreign_keys = ON")
+                cursor.execute("PRAGMA mmap_size = 268435456")
+                cursor.execute("PRAGMA cache_size = -64000")
+                cursor.close()
+
     return _engine
 
 
